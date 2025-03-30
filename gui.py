@@ -2,6 +2,31 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
 import os, json, hashlib, binascii
+import random
+import time
+
+# --- Helper Function for SoC Calculation ---
+def voltage_to_soc(voltage):
+    """
+    Calculate SoC based on a linear mapping:
+    3.00V  -> 0% SoC
+    4.00V  -> 100% SoC
+    """
+    soc = (voltage - 3.00) / (4.00 - 3.00) * 100
+    return max(0, min(soc, 100))
+
+# --- Dummy Serial Class for Simulation ---
+class DummySerial:
+    def __init__(self, baudrate=9600, timeout=1):
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.in_waiting = True  # Always simulate that data is available
+
+    def readline(self):
+        # Simulate sensor values for 12 channels (for 12 batteries) between 3.00V and 4.00V.
+        values = [f"{random.uniform(3.00, 4.00):.2f}" for _ in range(12)]
+        time.sleep(0.1)  # Simulate a small delay
+        return (",".join(values) + "\n").encode('utf-8')
 
 # --- Password Hashing Utilities ---
 def hash_password(password, salt=None):
@@ -143,57 +168,81 @@ class SystemView(tk.Frame):
         self.rect9_image = None
         self.image5 = None
         self.arrow_image = None
+        self.serial_obj = None   # This will hold our dummy serial connection
+        # Lists to store references to battery icon texts
+        self.center_text_items = []
+        self.secondary_text_items = []
+        self.center_text_canvases = []
+        # Dictionary to store rectangle panel text items (for overall values)
+        self.rect_text_items = {}
         self.load_all_images()
 
-        # Define positions and text values for the rectangle canvases.
+        # Create the rectangle panels for overall system values.
         rect_positions = [(120, 80), (330, 80), (540, 80), (750, 80), (960, 80)]
-        rect_labels = ["SoC:", "SoH:", "Voltage:", "Current:", "Temp:"]
-        rect_data = ["80%", "58%", "12.5V", "5A", "35°C"]
-        
+        rect_labels = ["SoC:", "SoH:", "Voltage:", "Temp:", "Alarm Status:"]
+        # Set initial values (placeholders)
+        initial_values = ["0%", "0%", "0.00V", "0°C", "Clear"]
         for idx, (x, y) in enumerate(rect_positions):
             canvas = tk.Canvas(self, width=self.rect9_image.width(), height=self.rect9_image.height(),
                                bg="#063028", highlightthickness=0)
             canvas.place(x=x, y=y)
             canvas.create_image(0, 0, image=self.rect9_image, anchor='nw')
+            # Display the label at the top of the panel.
             canvas.create_text(self.rect9_image.width()/2, 5, text=rect_labels[idx],
                                fill="white", font=("Helvetica", 14, "bold"), anchor='n')
-            canvas.create_text(self.rect9_image.width()/2, self.rect9_image.height()/2,
-                               text=rect_data[idx], fill="white", font=("Helvetica", 20, "bold"), anchor='center')
+            # Create a dynamic text item for the value and store its reference.
+            text_id = canvas.create_text(self.rect9_image.width()/2, self.rect9_image.height()/2,
+                               text=initial_values[idx], fill="white", font=("Helvetica", 20, "bold"), anchor='center')
+            self.rect_text_items[rect_labels[idx]] = (canvas, text_id)
         
-        # Place 6 instances of "Image 5" (first row) with two texts on each image.
-        # Top text will now be labeled "c1", "c2", ..., and moved from y=5 to y=35.
+        # Create "Image 5" canvases for individual battery sensor display.
         start_x = 70
         gap = 200
+        # First row: Labels C1 to C6
         for i in range(6):
             x_pos = start_x + i * gap
             canvas = tk.Canvas(self, width=self.image5.width(), height=self.image5.height(),
                                bg="#063028", highlightthickness=0)
             canvas.place(x=x_pos, y=300)
             canvas.create_image(0, 0, image=self.image5, anchor='nw')
-            battery_label = "C" + str(i + 1)  # For first row: c1, c2, ..., c6
+            battery_label = "C" + str(i + 1)
             canvas.create_text(self.image5.width()//2, 35, text=battery_label,
-                               fill="white", font=("Helvetica", 14, "bold"), anchor="n")
-            canvas.create_text(self.image5.width()//2, self.image5.height()//2, text="Center Text",
-                               fill="white", font=("Helvetica", 14, "bold"), anchor="center")
+                               fill="#DEEBDD", font=("Helvetica", 24, "bold"), anchor="n")
+            # Create center text item for live sensor value (initially "0")
+            center_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2,
+                                                text="0", fill="white", font=("Helvetica", 14, "bold"), anchor="center")
+            self.center_text_items.append(center_text_id)
+            # Create secondary text item below the live sensor value (initially "Voltage:")
+            secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
+                                                   text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
+            self.secondary_text_items.append(secondary_text_id)
+            self.center_text_canvases.append(canvas)
         
-        # Place 6 instances of "Image 5" (second row) with two texts on each image.
-        # Top text labels will be c7, c8, ..., c12.
+        # Second row: Labels C7 to C12
         for i in range(6):
             x_pos = start_x + i * gap
             canvas = tk.Canvas(self, width=self.image5.width(), height=self.image5.height(),
                                bg="#063028", highlightthickness=0)
             canvas.place(x=x_pos, y=440)
             canvas.create_image(0, 0, image=self.image5, anchor='nw')
-            battery_label = "C" + str(i + 7)  # For second row: c7, c8, ..., c12
+            battery_label = "C" + str(i + 7)
             canvas.create_text(self.image5.width()//2, 35, text=battery_label,
-                               fill="white", font=("Helvetica", 14, "bold"), anchor="n")
-            canvas.create_text(self.image5.width()//2, self.image5.height()//2, text="Center Text",
-                               fill="white", font=("Helvetica", 14, "bold"), anchor="center")
+                               fill="#DEEBDD", font=("Helvetica", 24, "bold"), anchor="n")
+            center_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2,
+                                                text="0", fill="white", font=("Helvetica", 14, "bold"), anchor="center")
+            self.center_text_items.append(center_text_id)
+            secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
+                                                   text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
+            self.secondary_text_items.append(secondary_text_id)
+            self.center_text_canvases.append(canvas)
         
         # Add the arrow (back button) at the top left corner.
         lbl_arrow = tk.Label(self, image=self.arrow_image, bg="#063028")
         lbl_arrow.place(x=20, y=20)
         lbl_arrow.bind("<Button-1>", lambda event: self.go_back())
+        
+        # Start the sensor update loop using simulated values.
+        self.after(1000, self.update_sensor_values)
     
     def load_all_images(self):
         # Load Rectangle 9.png and resize to 45% of original dimensions.
@@ -227,6 +276,52 @@ class SystemView(tk.Frame):
             return
         arrow_img = Image.open(arrow_img_path)
         self.arrow_image = ImageTk.PhotoImage(arrow_img)
+        
+        # Instead of a real serial port, use DummySerial for simulation.
+        try:
+            self.serial_obj = DummySerial(baudrate=9600, timeout=1)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error creating dummy serial: {e}")
+            self.serial_obj = None
+    
+    def update_sensor_values(self):
+        # Read a line from the dummy serial and update both battery icons and rectangle panels.
+        if self.serial_obj:
+            try:
+                line = self.serial_obj.readline().decode('utf-8').strip()
+                if line:
+                    values = line.split(',')
+                    if len(values) >= 12:
+                        # Update individual battery icons.
+                        for i, canvas in enumerate(self.center_text_canvases):
+                            # Update the live sensor value (center text) with a "Voltage:" prefix.
+                            canvas.itemconfig(self.center_text_items[i], text="Voltage: " + values[i])
+                            # Update the secondary text item with "SoC:" using the calculated value.
+                            voltage = float(values[i])
+                            cell_soc = voltage_to_soc(voltage)
+                            canvas.itemconfig(self.secondary_text_items[i], text="SoC: " + f"{cell_soc:.0f}%")
+                        # Now, compute overall system values using the 12 battery values.
+                        battery_values = [float(v) for v in values]
+                        average_voltage = sum(battery_values) / len(battery_values)
+                        overall_soc = voltage_to_soc(average_voltage)
+                        overall_soh = random.uniform(90, 100)   # Simulated SoH value.
+                        overall_temp = random.uniform(20, 35)    # Simulated temperature.
+                        
+                        # Update the rectangle panels.
+                        canvas, text_id = self.rect_text_items["SoC:"]
+                        canvas.itemconfig(text_id, text=f"{overall_soc:.0f}%")
+                        canvas, text_id = self.rect_text_items["SoH:"]
+                        canvas.itemconfig(text_id, text=f"{overall_soh:.0f}%")
+                        canvas, text_id = self.rect_text_items["Voltage:"]
+                        canvas.itemconfig(text_id, text=f"{average_voltage:.2f}V")
+                        canvas, text_id = self.rect_text_items["Temp:"]
+                        canvas.itemconfig(text_id, text=f"{overall_temp:.0f}°C")
+                        # For Alarm Status, we keep it static (or you can simulate based on conditions).
+                        canvas, text_id = self.rect_text_items["Alarm Status:"]
+                        canvas.itemconfig(text_id, text="Clear")
+            except Exception as e:
+                print("Error reading sensor values:", e)
+        self.after(1000, self.update_sensor_values)
     
     def go_back(self):
         self.pack_forget()
@@ -247,14 +342,48 @@ class AlarmView(tk.Frame):
 class AboutView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#063028")
-        label = tk.Label(self, text="About", font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
-        label.pack(pady=20)
-        lbl_arrow = tk.Label(self, image=self.master.arrow_image, bg="#063028")
-        lbl_arrow.place(x=20, y=20)
-        lbl_arrow.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
-        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), bg="#063028", fg="white")
-        back.pack(pady=10)
+        self.create_widgets()
+    
+    def create_widgets(self):
+        # Title
+        title = tk.Label(self, text="About Battery Management System", 
+                         font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
+        title.pack(pady=20)
+        
+        # Version
+        version = tk.Label(self, text="Version 1.0.0", 
+                           font=("Helvetica", 16), bg="#063028", fg="white")
+        version.pack(pady=5)
+        
+        # Description
+        description_text = (
+            "This application simulates a Battery Management System (BMS) "
+            "for monitoring battery parameters such as Voltage, SoC, SoH, and Temperature.\n\n"
+            "It uses simulated sensor data to display both individual cell readings and overall system values. "
+            "Developed by John Ninan"
+        )
+        description = tk.Label(self, text=description_text, 
+                               font=("Helvetica", 12), bg="#063028", fg="white", 
+                               wraplength=800, justify="center")
+        description.pack(pady=10)
+        
+        # Credits / Acknowledgments
+        credits = tk.Label(self, text="Credits: Tkinter, PIL, Python", 
+                           font=("Helvetica", 10), bg="#063028", fg="white")
+        credits.pack(pady=5)
+        
+        # Disclaimer
+        disclaimer = tk.Label(self, text="Disclaimer: This is a simulation and should not be used for actual battery management purposes.", 
+                              font=("Helvetica", 10), bg="#063028", fg="white", 
+                              wraplength=800, justify="center")
+        disclaimer.pack(pady=10)
+        
+        # Back button
+        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), 
+                        bg="#063028", fg="white")
+        back.pack(pady=20)
         back.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
+
 
 class BMSApp(tk.Tk):
     def __init__(self):
