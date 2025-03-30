@@ -166,31 +166,35 @@ class SystemView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#063028")
         self.rect9_image = None
+        self.rect26_image = None  # Normal alarm panel image.
+        self.rect27_image = None  # Active alarm panel image.
         self.image5 = None
         self.arrow_image = None
-        self.serial_obj = None   # This will hold our dummy serial connection
-        # Lists to store references to battery icon texts
+        self.serial_obj = None   # Dummy serial connection.
+        # Lists to store references to battery icon texts.
         self.center_text_items = []
         self.secondary_text_items = []
+        self.temperature_text_items = []
         self.center_text_canvases = []
-        # Dictionary to store rectangle panel text items (for overall values)
+        # Dictionary to store rectangle panel text items (for overall system values).
         self.rect_text_items = {}
         self.load_all_images()
 
         # Create the rectangle panels for overall system values.
         rect_positions = [(120, 80), (330, 80), (540, 80), (750, 80), (960, 80)]
         rect_labels = ["SoC:", "SoH:", "Voltage:", "Temp:", "Alarm Status:"]
-        # Set initial values (placeholders)
         initial_values = ["0%", "0%", "0.00V", "0°C", "Clear"]
         for idx, (x, y) in enumerate(rect_positions):
             canvas = tk.Canvas(self, width=self.rect9_image.width(), height=self.rect9_image.height(),
                                bg="#063028", highlightthickness=0)
             canvas.place(x=x, y=y)
-            canvas.create_image(0, 0, image=self.rect9_image, anchor='nw')
-            # Display the label at the top of the panel.
+            # For the last panel, use Rectangle 26 image.
+            if idx == len(rect_positions) - 1:
+                canvas.create_image(0, 0, image=self.rect26_image, anchor='nw')
+            else:
+                canvas.create_image(0, 0, image=self.rect9_image, anchor='nw')
             canvas.create_text(self.rect9_image.width()/2, 5, text=rect_labels[idx],
                                fill="white", font=("Helvetica", 14, "bold"), anchor='n')
-            # Create a dynamic text item for the value and store its reference.
             text_id = canvas.create_text(self.rect9_image.width()/2, self.rect9_image.height()/2,
                                text=initial_values[idx], fill="white", font=("Helvetica", 20, "bold"), anchor='center')
             self.rect_text_items[rect_labels[idx]] = (canvas, text_id)
@@ -208,14 +212,16 @@ class SystemView(tk.Frame):
             battery_label = "C" + str(i + 1)
             canvas.create_text(self.image5.width()//2, 35, text=battery_label,
                                fill="#DEEBDD", font=("Helvetica", 24, "bold"), anchor="n")
-            # Create center text item for live sensor value (initially "0")
             center_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2,
                                                 text="0", fill="white", font=("Helvetica", 14, "bold"), anchor="center")
             self.center_text_items.append(center_text_id)
-            # Create secondary text item below the live sensor value (initially "Voltage:")
             secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
                                                    text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
             self.secondary_text_items.append(secondary_text_id)
+            # Create a third text item for temperature.
+            temperature_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 40,
+                                                     text="T: 0°C", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
+            self.temperature_text_items.append(temperature_text_id)
             self.center_text_canvases.append(canvas)
         
         # Second row: Labels C7 to C12
@@ -234,6 +240,9 @@ class SystemView(tk.Frame):
             secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
                                                    text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
             self.secondary_text_items.append(secondary_text_id)
+            temperature_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 40,
+                                                     text="T: 0°C", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
+            self.temperature_text_items.append(temperature_text_id)
             self.center_text_canvases.append(canvas)
         
         # Add the arrow (back button) at the top left corner.
@@ -256,6 +265,24 @@ class SystemView(tk.Frame):
         new_h = int(h * 0.45)
         resized_rect = rect_img.resize((new_w, new_h))
         self.rect9_image = ImageTk.PhotoImage(resized_rect)
+        
+        # Load Rectangle 26.png for the normal alarm panel.
+        rect26_path = os.path.join(os.path.dirname(__file__), "iconsAndImages", "Rectangle 26.png")
+        if not os.path.exists(rect26_path):
+            messagebox.showerror("Error", f"Rectangle 26 image not found: {rect26_path}")
+            return
+        rect26_img = Image.open(rect26_path)
+        resized_rect26 = rect26_img.resize((new_w, new_h))
+        self.rect26_image = ImageTk.PhotoImage(resized_rect26)
+        
+        # Load Rectangle 27.png for the active alarm panel.
+        rect27_path = os.path.join(os.path.dirname(__file__), "iconsAndImages", "Rectangle 27.png")
+        if not os.path.exists(rect27_path):
+            messagebox.showerror("Error", f"Rectangle 27 image not found: {rect27_path}")
+            return
+        rect27_img = Image.open(rect27_path)
+        resized_rect27 = rect27_img.resize((new_w, new_h))
+        self.rect27_image = ImageTk.PhotoImage(resized_rect27)
         
         # Load Image 5.png and resize to 35% of original dimensions.
         image5_path = os.path.join(os.path.dirname(__file__), "iconsAndImages", "Image 5.png")
@@ -292,22 +319,25 @@ class SystemView(tk.Frame):
                 if line:
                     values = line.split(',')
                     if len(values) >= 12:
+                        battery_temps = []
                         # Update individual battery icons.
                         for i, canvas in enumerate(self.center_text_canvases):
-                            # Update the live sensor value (center text) with a "Voltage:" prefix.
-                            canvas.itemconfig(self.center_text_items[i], text="Voltage: " + values[i])
-                            # Update the secondary text item with "SoC:" using the calculated value.
                             voltage = float(values[i])
                             cell_soc = voltage_to_soc(voltage)
+                            canvas.itemconfig(self.center_text_items[i], text="Voltage: " + values[i])
                             canvas.itemconfig(self.secondary_text_items[i], text="SoC: " + f"{cell_soc:.0f}%")
-                        # Now, compute overall system values using the 12 battery values.
+                            # Simulate temperature for each cell (realistic range, e.g., 25°C to 40°C)
+                            temp_val = random.uniform(25, 40)
+                            battery_temps.append(temp_val)
+                            canvas.itemconfig(self.temperature_text_items[i], text="Temp: " + f"{temp_val:.0f}°C")
+                        # Compute overall system values.
                         battery_values = [float(v) for v in values]
                         average_voltage = sum(battery_values) / len(battery_values)
                         overall_soc = voltage_to_soc(average_voltage)
                         overall_soh = random.uniform(90, 100)   # Simulated SoH value.
-                        overall_temp = random.uniform(20, 35)    # Simulated temperature.
+                        overall_temp = sum(battery_temps) / len(battery_temps)
                         
-                        # Update the rectangle panels.
+                        # Update rectangle panels.
                         canvas, text_id = self.rect_text_items["SoC:"]
                         canvas.itemconfig(text_id, text=f"{overall_soc:.0f}%")
                         canvas, text_id = self.rect_text_items["SoH:"]
@@ -316,9 +346,24 @@ class SystemView(tk.Frame):
                         canvas.itemconfig(text_id, text=f"{average_voltage:.2f}V")
                         canvas, text_id = self.rect_text_items["Temp:"]
                         canvas.itemconfig(text_id, text=f"{overall_temp:.0f}°C")
-                        # For Alarm Status, we keep it static (or you can simulate based on conditions).
-                        canvas, text_id = self.rect_text_items["Alarm Status:"]
-                        canvas.itemconfig(text_id, text="Clear")
+                        
+                        # Update Alarm Status panel.
+                        alarm_canvas, _ = self.rect_text_items["Alarm Status:"]
+                        alarm_canvas.delete("all")
+                        if overall_temp > 30:
+                            # Active alarm: use Rectangle 27 image.
+                            alarm_canvas.create_image(0, 0, image=self.rect27_image, anchor='nw')
+                            alarm_canvas.create_text(self.rect27_image.width()/2, 5, text="Alarm Status:",
+                                                       fill="white", font=("Helvetica", 14, "bold"), anchor="n")
+                            alarm_canvas.create_text(self.rect27_image.width()/2, self.rect27_image.height()/2,
+                                                       text="Active", fill="white", font=("Helvetica", 20, "bold"), anchor="center")
+                        else:
+                            # Normal state: use Rectangle 26 image.
+                            alarm_canvas.create_image(0, 0, image=self.rect26_image, anchor='nw')
+                            alarm_canvas.create_text(self.rect26_image.width()/2, 5, text="Alarm Status:",
+                                                       fill="white", font=("Helvetica", 14, "bold"), anchor="n")
+                            alarm_canvas.create_text(self.rect26_image.width()/2, self.rect26_image.height()/2,
+                                                       text="Clear", fill="white", font=("Helvetica", 20, "bold"), anchor="center")
             except Exception as e:
                 print("Error reading sensor values:", e)
         self.after(1000, self.update_sensor_values)
@@ -342,48 +387,14 @@ class AlarmView(tk.Frame):
 class AboutView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#063028")
-        self.create_widgets()
-    
-    def create_widgets(self):
-        # Title
-        title = tk.Label(self, text="About Battery Management System", 
-                         font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
-        title.pack(pady=20)
-        
-        # Version
-        version = tk.Label(self, text="Version 1.0.0", 
-                           font=("Helvetica", 16), bg="#063028", fg="white")
-        version.pack(pady=5)
-        
-        # Description
-        description_text = (
-            "This application simulates a Battery Management System (BMS) "
-            "for monitoring battery parameters such as Voltage, SoC, SoH, and Temperature.\n\n"
-            "It uses simulated sensor data to display both individual cell readings and overall system values. "
-            "Developed by John Ninan"
-        )
-        description = tk.Label(self, text=description_text, 
-                               font=("Helvetica", 12), bg="#063028", fg="white", 
-                               wraplength=800, justify="center")
-        description.pack(pady=10)
-        
-        # Credits / Acknowledgments
-        credits = tk.Label(self, text="Credits: Tkinter, PIL, Python", 
-                           font=("Helvetica", 10), bg="#063028", fg="white")
-        credits.pack(pady=5)
-        
-        # Disclaimer
-        disclaimer = tk.Label(self, text="Disclaimer: This is a simulation and should not be used for actual battery management purposes.", 
-                              font=("Helvetica", 10), bg="#063028", fg="white", 
-                              wraplength=800, justify="center")
-        disclaimer.pack(pady=10)
-        
-        # Back button
-        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), 
-                        bg="#063028", fg="white")
-        back.pack(pady=20)
+        label = tk.Label(self, text="About", font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
+        label.pack(pady=20)
+        lbl_arrow = tk.Label(self, image=self.master.arrow_image, bg="#063028")
+        lbl_arrow.place(x=20, y=20)
+        lbl_arrow.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
+        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), bg="#063028", fg="white")
+        back.pack(pady=10)
         back.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
-
 
 class BMSApp(tk.Tk):
     def __init__(self):
