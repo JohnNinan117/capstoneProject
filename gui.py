@@ -5,6 +5,7 @@ import os, json, hashlib, binascii
 import random
 import time
 import logging
+import re
 
 # Set up logging to file
 logging.basicConfig(
@@ -13,6 +14,20 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+def is_valid_password(password):
+    return (
+        len(password) >= 8 and
+        re.search(r"[A-Z]", password) and
+        re.search(r"[a-z]", password) and
+        re.search(r"[0-9]", password) and
+        re.search(r"[!@#$%^&*()_+=\-{}\[\]:;\"'<>,.?/\\|]", password)
+    )
+
+def is_valid_username(username):
+    return (
+        len(username) >= 3 and
+        re.match(r"^\w+$", username)
+    )
 # --- Helper Function for SoC Calculation ---
 def voltage_to_soc(voltage):
     """
@@ -31,8 +46,8 @@ class DummySerial:
         self.in_waiting = True  # Always simulate that data is available
 
     def readline(self):
-        # Simulate sensor values for 12 channels (for 12 batteries) between 3.00V and 4.00V.
-        values = [f"{random.uniform(3.00, 4.00):.2f}" for _ in range(12)]
+        # Simulate sensor values for 12 channels (for 12 batteries) between 3.7V and 4.2V.
+        values = [f"{random.uniform(3.7, 4.2):.2f}" for _ in range(12)]
         time.sleep(0.1)  # Simulate a small delay
         return (",".join(values) + "\n").encode('utf-8')
 
@@ -86,6 +101,9 @@ class RegistrationFrame(tk.Frame):
             json.dump(users, f)
         messagebox.showinfo("Success", "Registration successful!")
         self.switch_to_login()
+        
+       
+
 
 # --- LoginFrame ---
 class LoginFrame(tk.Frame):
@@ -105,7 +123,7 @@ class LoginFrame(tk.Frame):
         self.password_entry = tk.Entry(self, show="*")
         self.password_entry.pack()
         tk.Button(self, text="Login", command=self.login).pack(pady=10)
-        tk.Button(self, text="Don't have an account? Register", command=self.switch_to_register).pack(pady=5)
+        tk.Button(self, text="Register", command=self.switch_to_register).pack(pady=5)
     
     def login(self):
         username = self.username_entry.get().strip()
@@ -170,7 +188,6 @@ class NavigationView(tk.Frame):
                              bg="#063028", fg="white")
         about_lbl.pack(pady=10)
         about_lbl.bind("<Button-1>", lambda e: self.master.show_view(self.master.about_view))
-
 # --- SystemView ---
 class SystemView(tk.Frame):
     def __init__(self, parent):
@@ -195,9 +212,10 @@ class SystemView(tk.Frame):
         self.load_all_images()
 
         # Create overall system panels.
-        rect_positions = [(120, 80), (330, 80), (540, 80), (750, 80), (960, 80)]
-        rect_labels = ["SoC:", "SoH:", "Voltage:", "Temp:", "Alarm Status:"]
-        initial_values = ["0%", "0%", "0.00V", "0°C", "Clear"]
+       # Create overall system panels (SoH removed)
+        rect_positions = [(250, 80), (460, 80), (670, 80), (880, 80)]
+        rect_labels    = ["SoC:",      "Voltage:", "Temp:",  "Alarm Status:"]
+        initial_values = ["0%",        "0.00V",    "0°C",    "Clear"]
         for idx, (x, y) in enumerate(rect_positions):
             canvas = tk.Canvas(self, width=self.rect9_image.width(), height=self.rect9_image.height(),
                                bg="#063028", highlightthickness=0)
@@ -237,9 +255,7 @@ class SystemView(tk.Frame):
             secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
                                                     text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
             self.secondary_text_items.append(secondary_text_id)
-            temperature_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 40,
-                                                      text="T: 0°C", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
-            self.temperature_text_items.append(temperature_text_id)
+            
             self.center_text_canvases.append(canvas)
             self.shutdown_text_items.append(None)
         
@@ -259,9 +275,6 @@ class SystemView(tk.Frame):
             secondary_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 20,
                                                     text="Voltage:", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
             self.secondary_text_items.append(secondary_text_id)
-            temperature_text_id = canvas.create_text(self.image5.width()//2, self.image5.height()//2 + 40,
-                                                      text="T: 0°C", fill="white", font=("Helvetica", 12, "bold"), anchor="center")
-            self.temperature_text_items.append(temperature_text_id)
             self.center_text_canvases.append(canvas)
             self.shutdown_text_items.append(None)
         
@@ -343,6 +356,7 @@ class SystemView(tk.Frame):
     def toggle_alarm_status(self, event):
         self.alarm_manual_active = not self.alarm_manual_active
         print("Manual alarm override set to", self.alarm_manual_active)
+        self.master.alarm_active = self.alarm_manual_active
     
     def update_sensor_values(self):
         if self.serial_obj:
@@ -351,111 +365,357 @@ class SystemView(tk.Frame):
                 if line:
                     values = line.split(',')
                     if len(values) >= 12:
+                        # Build list of per-cell random temps and update icons
                         battery_temps = []
-                        # Update each battery icon.
                         for i, canvas in enumerate(self.center_text_canvases):
                             voltage = float(values[i])
                             cell_soc = voltage_to_soc(voltage)
-                            temp_val = random.uniform(25, 40)
+                            temp_val = random.uniform(15, 18)
                             battery_temps.append(temp_val)
+
+                        # Compute overall temperature for alarm logic
                         overall_temp = sum(battery_temps) / len(battery_temps)
-                        
-                        if self.alarm_manual_active or overall_temp > 40:
-                            # Alarm active: update battery icon backgrounds to battery (10).png and display shutdown message.
+
+                        # Apply alarm or normal icon update
+                        if self.alarm_manual_active or overall_temp > 20:
                             for i, canvas in enumerate(self.center_text_canvases):
                                 canvas.delete("bg")
-                                canvas.create_image(0, 0, image=self.battery10_image, anchor='nw', tags="bg")
+                                canvas.create_image(0, 0, image=self.battery10_image,
+                                                    anchor='nw', tags="bg")
                                 canvas.tag_lower("bg")
                                 canvas.itemconfig(self.center_text_items[i],
-                                                text="Safety Shutdown Active",
-                                                fill="#DEEBDD",
-                                                font=("Helvetica", int(9), "bold"))
-                                    
-                                canvas.itemconfig(self.secondary_text_items[i], text="", fill="white")
-                                canvas.itemconfig(self.temperature_text_items[i], text="", fill="white")
+                                                  text="Safety Shutdown Active",
+                                                  fill="#DEEBDD",
+                                                  font=("Helvetica", 9, "bold"))
+                                canvas.itemconfig(self.secondary_text_items[i],
+                                                  text="", fill="white")
                         else:
-                            # Normal state: update each battery icon normally.
                             for i, canvas in enumerate(self.center_text_canvases):
                                 voltage = float(values[i])
                                 cell_soc = voltage_to_soc(voltage)
-                                temp_val = battery_temps[i]
                                 canvas.delete("bg")
-                                canvas.create_image(0, 0, image=self.image5, anchor='nw', tags="bg")
+                                canvas.create_image(0, 0, image=self.image5,
+                                                    anchor='nw', tags="bg")
                                 canvas.tag_lower("bg")
-                                canvas.itemconfig(self.center_text_items[i], text="Voltage: " + values[i], fill="#DEEBDD")
-                                canvas.itemconfig(self.secondary_text_items[i], text="SoC: " + f"{cell_soc:.0f}%", fill="#DEEBDD")
-                                canvas.itemconfig(self.temperature_text_items[i], text="Temp: " + f"{temp_val:.0f}°C", fill="#DEEBDD")
+                                canvas.itemconfig(self.center_text_items[i],
+                                                  text=f"Voltage: {voltage:.2f}V",
+                                                  fill="#DEEBDD")
+                                canvas.itemconfig(self.secondary_text_items[i],
+                                                  text=f"SoC: {cell_soc:.0f}%",
+                                                  fill="#DEEBDD")
                                 if self.shutdown_text_items[i] is not None:
                                     canvas.delete(self.shutdown_text_items[i])
                                     self.shutdown_text_items[i] = None
-                        
-                        # Compute overall system values.
-                        battery_values = [float(v) for v in values]
-                        average_voltage = sum(battery_values) / len(battery_values)
-                        overall_soc = voltage_to_soc(average_voltage)
-                        overall_soh = random.uniform(90, 100)
-                        overall_temp = sum(battery_temps) / len(battery_temps)
-                        
-                        # Update overall panels.
+
+                        # --- NEW: compute average voltage of all 12 cells ---
+                        battery_values   = [float(v) for v in values]
+                        average_voltage  = sum(battery_values) / len(battery_values)
+                        overall_soc      = voltage_to_soc(average_voltage)
+                        overall_soh      = random.uniform(90, 100)
+
+                        # Update overall panels
                         canvas, text_id = self.rect_text_items["SoC:"]
                         canvas.itemconfig(text_id, text=f"{overall_soc:.0f}%")
-                        canvas, text_id = self.rect_text_items["SoH:"]
-                        canvas.itemconfig(text_id, text=f"{overall_soh:.0f}%")
                         canvas, text_id = self.rect_text_items["Voltage:"]
                         canvas.itemconfig(text_id, text=f"{average_voltage:.2f}V")
                         canvas, text_id = self.rect_text_items["Temp:"]
                         canvas.itemconfig(text_id, text=f"{overall_temp:.0f}°C")
-                        
-                        # Update overall Alarm Status panel.
+
+                        # Update Alarm Status panel
                         alarm_canvas, _ = self.rect_text_items["Alarm Status:"]
                         alarm_canvas.delete("all")
-                        if self.alarm_manual_active or overall_temp > 40:
-                            logging.info("Alarm Active: Temperature exceeded threshold or manual override triggered.")
+                        if self.alarm_manual_active:
+                            logging.info("Alarm Active: Manual override.")
                             alarm_canvas.create_image(0, 0, image=self.rect27_image, anchor='nw')
-                            alarm_canvas.create_text(self.rect27_image.width()/2, 5, text="Alarm Status:",
-                                                       fill="white", font=("Helvetica", 14, "bold"), anchor="n")
-                            alarm_canvas.create_text(self.rect27_image.width()/2, self.rect27_image.height()/2,
-                                                       text="Active", fill="white", font=("Helvetica", 20, "bold"), anchor="center")
+                            alarm_canvas.create_text(self.rect27_image.width()/2, 5,
+                                                     text="Alarm Status:",
+                                                     fill="white",
+                                                     font=("Helvetica", 14, "bold"),
+                                                     anchor="n")
+                            alarm_canvas.create_text(self.rect27_image.width()/2,
+                                                     self.rect27_image.height()/2,
+                                                     text="Active",
+                                                     fill="white",
+                                                     font=("Helvetica", 20, "bold"),
+                                                     anchor="center")
+                            
+                        elif overall_temp > 20:
+                            logging.info("Alarm Active: Temperature exceeded threshold or manual override.")
+                            alarm_canvas.create_image(0, 0, image=self.rect27_image, anchor='nw')
+                            alarm_canvas.create_text(self.rect27_image.width()/2, 5,
+                                                     text="Alarm Status:",
+                                                     fill="white",
+                                                     font=("Helvetica", 14, "bold"),
+                                                     anchor="n")
+                            alarm_canvas.create_text(self.rect27_image.width()/2,
+                                                     self.rect27_image.height()/2,
+                                                     text="Active",
+                                                     fill="white",
+                                                     font=("Helvetica", 20, "bold"),
+                                                     anchor="center")    
                         else:
-                            logging.info("Alarm Clear: Temperature within normal range.")
+                            logging.info("Alarm Clear: Temperature is normal.")
                             alarm_canvas.create_image(0, 0, image=self.rect26_image, anchor='nw')
-                            alarm_canvas.create_text(self.rect26_image.width()/2, 5, text="Alarm Status:",
-                                                       fill="white", font=("Helvetica", 14, "bold"), anchor="n")
-                            alarm_canvas.create_text(self.rect26_image.width()/2, self.rect26_image.height()/2,
-                                                       text="Clear", fill="white", font=("Helvetica", 20, "bold"), anchor="center")
+                            alarm_canvas.create_text(self.rect26_image.width()/2, 5,
+                                                     text="Alarm Status:",
+                                                     fill="white",
+                                                     font=("Helvetica", 14, "bold"),
+                                                     anchor="n")
+                            alarm_canvas.create_text(self.rect26_image.width()/2,
+                                                     self.rect26_image.height()/2,
+                                                     text="Clear",
+                                                     fill="white",
+                                                     font=("Helvetica", 20, "bold"),
+                                                     anchor="center")
+
             except Exception as e:
                 print("Error reading sensor values:", e)
+
+        # schedule next update
         self.after(1000, self.update_sensor_values)
+
     
     def go_back(self):
         self.pack_forget()
         self.master.show_view(self.master.navigation_view)
-
-# --- AlarmView ---
 class AlarmView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#063028")
-        label = tk.Label(self, text="Alarm View", font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
-        label.pack(pady=20)
+
+        # Load status background images
+        self.green_rect_image = self.load_image("greenRectangle.png")
+        self.red_rect_image = self.load_image("redRectangle.png")
+
+        # Status image and label
+        self.bg_image_label = tk.Label(self, bg="#063028")
+        self.bg_image_label.pack(pady=40)
+        self.bg_image_label.bind("<Button-1>", self.toggle_alarm_status)
+
+        self.status_label = tk.Label(self.bg_image_label, text="", font=("Helvetica", 20, "bold"),
+                                     bg="#2DC295", fg="#DEEBDD")
+        self.status_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.reason_label = tk.Label(self, text="", font=("Helvetica", 14),
+                                     bg="#063028", fg="#DEEBDD")
+        self.reason_label.pack(pady=(5, 20))
+
+        # 🔙 Back arrow only (no 'Back' text)
         lbl_arrow = tk.Label(self, image=self.master.arrow_image, bg="#063028")
         lbl_arrow.place(x=20, y=20)
         lbl_arrow.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
-        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), bg="#063028", fg="white")
-        back.pack(pady=10)
-        back.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
 
-# --- AboutView ---
+        # 🧾 Log history viewer
+        self.log_label = tk.Label(self, text="Alarm History", font=("Helvetica", 16, "bold"),
+                                  bg="#063028", fg="white")
+        self.log_label.pack()
+
+        self.log_box = tk.Text(self, height=8, width=80, bg="#021B17", fg="#DEEBDD",
+                               font=("Courier", 12), state="disabled")
+        self.log_box.pack(pady=5)
+
+        self.scrollbar = tk.Scrollbar(self, command=self.log_box.yview)
+        self.scrollbar.pack(side="right", fill="y")
+        self.log_box.config(yscrollcommand=self.scrollbar.set)
+
+        self.update_alarm_status()
+        self.update_log_view()
+
+    def load_image(self, filename):
+        path = os.path.join(os.path.dirname(__file__), "iconsAndImages", filename)
+        if not os.path.exists(path):
+            messagebox.showerror("Error", f"Image not found: {filename}")
+            return None
+        img = Image.open(path)
+        return ImageTk.PhotoImage(img)
+
+    def toggle_alarm_status(self, event):
+        new_state = not self.master.alarm_active
+        self.master.alarm_active = new_state
+        self.master.system_view.alarm_manual_active = new_state
+        print("Manual alarm override set to:", new_state)
+        self.update_alarm_status()
+
+    def update_alarm_status(self):
+        alarm_active = getattr(self.master, "alarm_active", False)
+        manual_override = getattr(self.master.system_view, "alarm_manual_active", False)
+
+        if alarm_active:
+            self.bg_image_label.config(image=self.red_rect_image)
+            self.status_label.config(text="Alarm Status: Active", bg="#FF5A55")
+            reason = "Manual override activated" if manual_override else "Temperature exceeded 20°C"
+        else:
+            self.bg_image_label.config(image=self.green_rect_image)
+            self.status_label.config(text="Alarm Status: Clear", bg="#2DC295")
+            reason = "System operating within normal limits"
+
+        self.reason_label.config(text=f"Reason: {reason}")
+        self.after(1000, self.update_alarm_status)
+
+    def update_log_view(self):
+        log_path = os.path.join(os.path.dirname(__file__), "alarm.log")
+        if os.path.exists(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()[-100:]  # Limit to last 100 entries
+                formatted = [
+                    self.format_log_line(line.strip())
+                    for line in lines if line.strip()
+                ]
+                self.log_box.config(state="normal")
+                self.log_box.delete(1.0, "end")
+                self.log_box.insert("end", "\n".join(formatted))
+                self.log_box.config(state="disabled")
+        self.after(5000, self.update_log_view)  # Refresh every 5 seconds
+
+    def format_log_line(self, line):
+        try:
+            time_part, msg = line.split(" - ", 1)
+            timestamp = time_part.split(",")[0]
+            return f"[{timestamp[-8:]}] {msg}"
+        except:
+            return line
+
+    def __init__(self, parent):
+        super().__init__(parent, bg="#063028")
+
+        # Load status background images
+        self.green_rect_image = self.load_image("greenRectangle.png")
+        self.red_rect_image = self.load_image("redRectangle.png")
+
+        # Status image and label
+        self.bg_image_label = tk.Label(self, bg="#063028")
+        self.bg_image_label.pack(pady=40)
+        self.bg_image_label.bind("<Button-1>", self.toggle_alarm_status)
+
+        self.status_label = tk.Label(self.bg_image_label, text="", font=("Helvetica", 20, "bold"),
+                                     bg="#2DC295", fg="#DEEBDD")
+        self.status_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.reason_label = tk.Label(self, text="", font=("Helvetica", 14),
+                                     bg="#063028", fg="#DEEBDD")
+        self.reason_label.pack(pady=(5, 20))
+
+        # 🔙 Back arrow only (no 'Back' text)
+        lbl_arrow = tk.Label(self, image=self.master.arrow_image, bg="#063028")
+        lbl_arrow.place(x=20, y=20)
+        lbl_arrow.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
+
+        # 🧾 Log history viewer
+        self.log_label = tk.Label(self, text="Alarm History", font=("Helvetica", 16, "bold"),
+                                  bg="#063028", fg="white")
+        self.log_label.pack()
+
+        self.log_box = tk.Text(self, height=8, width=80, bg="#021B17", fg="#DEEBDD",
+                               font=("Courier", 12), state="disabled")
+        self.log_box.pack(pady=5)
+
+        self.scrollbar = tk.Scrollbar(self, command=self.log_box.yview)
+        self.scrollbar.pack(side="right", fill="y")
+        self.log_box.config(yscrollcommand=self.scrollbar.set)
+
+        self.update_alarm_status()
+        self.update_log_view()
+
+    def load_image(self, filename):
+        path = os.path.join(os.path.dirname(__file__), "iconsAndImages", filename)
+        if not os.path.exists(path):
+            messagebox.showerror("Error", f"Image not found: {filename}")
+            return None
+        img = Image.open(path)
+        return ImageTk.PhotoImage(img)
+
+    def toggle_alarm_status(self, event):
+        new_state = not self.master.alarm_active
+        self.master.alarm_active = new_state
+        self.master.system_view.alarm_manual_active = new_state
+        print("Manual alarm override set to:", new_state)
+        self.update_alarm_status()
+
+    def update_alarm_status(self):
+        alarm_active = getattr(self.master, "alarm_active", False)
+        manual_override = getattr(self.master.system_view, "alarm_manual_active", False)
+
+        if alarm_active:
+            self.bg_image_label.config(image=self.red_rect_image)
+            self.status_label.config(text="Alarm Status: Active", bg="#FF5A55")
+            reason = "Manual override activated" if manual_override else "Temperature exceeded 40°C"
+        else:
+            self.bg_image_label.config(image=self.green_rect_image)
+            self.status_label.config(text="Alarm Status: Clear", bg="#2DC295")
+            reason = "System operating within normal limits"
+
+        self.reason_label.config(text=f"Reason: {reason}")
+        self.after(1000, self.update_alarm_status)
+
+    def update_log_view(self):
+        log_path = os.path.join(os.path.dirname(__file__), "alarm.log")
+        if os.path.exists(log_path):
+            with open(log_path, "r") as f:
+                lines = f.readlines()[-100:]  # Limit to last 100 entries
+                formatted = [
+                    self.format_log_line(line.strip())
+                    for line in lines if line.strip()
+                ]
+                self.log_box.config(state="normal")
+                self.log_box.delete(1.0, "end")
+                self.log_box.insert("end", "\n".join(formatted))
+                self.log_box.config(state="disabled")
+        self.after(5000, self.update_log_view)  # Refresh every 5 seconds
+
+    def format_log_line(self, line):
+        try:
+            time_part, msg = line.split(" - ", 1)
+            timestamp = time_part.split(",")[0]
+            return f"[{timestamp[-8:]}] {msg}"
+        except:
+            return line
+
 class AboutView(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg="#063028")
-        label = tk.Label(self, text="About", font=("Helvetica", 24, "bold"), bg="#063028", fg="white")
-        label.pack(pady=20)
+
+        # Back arrow only (no "Back" text)
         lbl_arrow = tk.Label(self, image=self.master.arrow_image, bg="#063028")
         lbl_arrow.place(x=20, y=20)
         lbl_arrow.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
-        back = tk.Label(self, text="Back", font=("Helvetica", 16, "bold"), bg="#063028", fg="white")
-        back.pack(pady=10)
-        back.bind("<Button-1>", lambda e: self.master.show_view(self.master.navigation_view))
+
+        # Title
+        title = tk.Label(self, text="Battery Management System", font=("Helvetica", 24, "bold"),
+                         bg="#063028", fg="#DEEBDD")
+        title.pack(pady=(60, 10))
+
+        # Purpose
+        purpose = tk.Label(self, text="A real-time monitoring tool for multi-cell battery packs.",
+                           font=("Helvetica", 14), bg="#063028", fg="#DEEBDD", justify="center")
+        purpose.pack(pady=5)
+
+        # Features
+        features = [
+            "• Live monitoring of voltage, SoC, and temperature",
+            "• Alarm system with auto/manual triggers",
+            "• Secure login with password hashing",
+            "• Alarm history log viewer",
+            "• Simple and intuitive user interface"
+        ]
+
+        for feature in features:
+            lbl = tk.Label(self, text=feature, font=("Helvetica", 12),
+                           bg="#063028", fg="#DEEBDD", justify="center")
+            lbl.pack()
+
+        # Developer info
+        dev = tk.Label(self, text="\nDeveloped by: Capstone Group 33",
+                       font=("Helvetica", 12), bg="#063028", fg="#DEEBDD")
+        dev.pack(pady=(20, 5))
+
+        # Version & tech stack
+        version = tk.Label(self, text="Version 1.0.0  •  Last updated: April 2025",
+                           font=("Helvetica", 10), bg="#063028", fg="#DEEBDD")
+        version.pack()
+
+        tech = tk.Label(self, text="Built with: Python 3, Tkinter, Pillow, JSON",
+                        font=("Helvetica", 10), bg="#063028", fg="#DEEBDD")
+        tech.pack()
+
 
 # --- BMSApp ---
 class BMSApp(tk.Tk):
@@ -469,10 +729,13 @@ class BMSApp(tk.Tk):
         self.system_view = SystemView(self)
         self.alarm_view = AlarmView(self)
         self.about_view = AboutView(self)
+        self.alarm_active = False            
         self.login_frame = None
         self.registration_frame = None
         self.current_view = None
         self.show_login()
+
+
     
     def load_arrow_image(self):
         arrow_img_path = os.path.join(os.path.dirname(__file__), "iconsAndImages", "Arrow 1.png")
